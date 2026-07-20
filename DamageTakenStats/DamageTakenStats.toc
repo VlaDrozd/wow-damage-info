@@ -1,0 +1,9 @@
+## Interface: 30300
+## Title: DamageTakenStats
+## Notes: Incoming damage & mitigation tracker
+## Author: vladrozd
+## Version: 1.0
+## SavedVariablesPerCharacter: DamageTakenStatsDB
+
+Core.lua
+UI.lua
