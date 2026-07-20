@@ -10,8 +10,14 @@ local format, floor = string.format, math.floor
 
 local PADDING = 10
 local LINE_HEIGHT = 14
-local FRAME_WIDTH = 230
+local FRAME_WIDTH = 270
+local BUTTON_WIDTH = 46
 local UPDATE_INTERVAL = 0.2 -- redraw at most 5x/sec regardless of log volume
+
+-- The server throttles chat; bursting a report out in one frame risks a
+-- "you are sending messages too quickly" mute, so lines are spaced out.
+local CHAT_SEND_INTERVAL = 0.35
+local CHAT_MAX_LENGTH = 255
 
 local SCHOOL_COLORS = {
 	[0x02] = "FFF58CBA", -- Holy
@@ -20,6 +26,17 @@ local SCHOOL_COLORS = {
 	[0x10] = "FF69CCF0", -- Frost
 	[0x20] = "FF9482C9", -- Shadow
 	[0x40] = "FFC79C6E", -- Arcane
+}
+
+-- The window stays localised, but the group report goes out in English so it
+-- is readable to anyone regardless of their client locale.
+local SCHOOL_NAMES_EN = {
+	[0x02] = "Holy",
+	[0x04] = "Fire",
+	[0x08] = "Nature",
+	[0x10] = "Frost",
+	[0x20] = "Shadow",
+	[0x40] = "Arcane",
 }
 
 local defaults = {
@@ -31,8 +48,14 @@ local defaults = {
 	shown = true,
 }
 
-local frame, lines, resetButton, lockButton
+local frame, lines, resetButton, lockButton, shareButton
+local chatTicker
+local chatQueue = {}
 local db
+
+local function Print(msg)
+	DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00WowDamageInfo:|r " .. msg)
+end
 
 local function FormatNum(n)
 	n = n or 0
@@ -49,6 +72,86 @@ local function Pct(part, whole)
 	if not whole or whole <= 0 then return 0 end
 	return part / whole * 100
 end
+
+--[[ Group chat report ]]
+
+-- 3.3.5a has no IsInGroup/IsInRaid -- the member-count calls are the way.
+local function GetGroupChannel()
+	if UnitInBattleground and UnitInBattleground("player") then
+		return "BATTLEGROUND"
+	elseif GetNumRaidMembers() > 0 then
+		return "RAID"
+	elseif GetNumPartyMembers() > 0 then
+		return "PARTY"
+	end
+	return nil
+end
+
+-- Plain text, no |c colour escapes: those are noise in someone else's chat log.
+local function BuildReport()
+	local total = stats.total
+	local report = {}
+
+	report[1] = format("[WDI] Damage taken: %s -- Physical %s (%.0f%%) / Magic %s (%.0f%%)",
+		FormatNum(total),
+		FormatNum(stats.physical), Pct(stats.physical, total),
+		FormatNum(stats.magic), Pct(stats.magic, total))
+
+	local parts, named = {}, 0
+	for _, school in ipairs(ns.SCHOOL_ORDER) do
+		local amount = stats.schools[school]
+		if amount and amount > 0 then
+			named = named + amount
+			parts[#parts + 1] = format("%s %s (%.0f%%)",
+				SCHOOL_NAMES_EN[school], FormatNum(amount), Pct(amount, total))
+		end
+	end
+	local mixed = stats.magic - named
+	if mixed > 0 then
+		parts[#parts + 1] = format("Mixed %s (%.0f%%)", FormatNum(mixed), Pct(mixed, total))
+	end
+	if #parts > 0 then
+		report[#report + 1] = "[WDI] Schools: " .. table.concat(parts, ", ")
+	end
+
+	local prevented = stats.blocked + stats.absorbed + stats.resisted
+	report[#report + 1] = format("[WDI] Mitigated %.1f%% -- blocked %s, absorbed %s, resisted %s",
+		Pct(prevented, total + prevented),
+		FormatNum(stats.blocked), FormatNum(stats.absorbed), FormatNum(stats.resisted))
+
+	report[#report + 1] = format("[WDI] Dodge/parry/miss: %d", stats.avoidCount)
+
+	for i = 1, #report do
+		report[i] = string.sub(report[i], 1, CHAT_MAX_LENGTH)
+	end
+	return report
+end
+
+local function SendReport()
+	if stats.total <= 0 then
+		Print("нечего отправлять — статистика пуста.")
+		return
+	end
+
+	local channel = GetGroupChannel()
+	if not channel then
+		Print("вы не в группе — отправлять некуда.")
+		return
+	end
+
+	-- Guard against a mashed button queueing the report several times over.
+	if #chatQueue > 0 then
+		Print("отчёт уже отправляется...")
+		return
+	end
+
+	local report = BuildReport()
+	for i = 1, #report do
+		chatQueue[i] = { text = report[i], channel = channel }
+	end
+	ns.chatElapsed = CHAT_SEND_INTERVAL -- let the first line go out immediately
+end
+ns.SendReport = SendReport
 
 local function GetLine(index)
 	local line = lines[index]
@@ -184,13 +287,13 @@ local function CreateUI()
 	title:SetText("Входящий урон")
 
 	lockButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-	lockButton:SetWidth(50)
+	lockButton:SetWidth(BUTTON_WIDTH)
 	lockButton:SetHeight(16)
 	lockButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -6, -6)
 	lockButton:SetScript("OnClick", ToggleLock)
 
 	resetButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-	resetButton:SetWidth(50)
+	resetButton:SetWidth(BUTTON_WIDTH)
 	resetButton:SetHeight(16)
 	resetButton:SetPoint("RIGHT", lockButton, "LEFT", -3, 0)
 	resetButton:SetText("Reset")
@@ -198,6 +301,13 @@ local function CreateUI()
 		ns.ResetStats()
 		UpdateDisplay()
 	end)
+
+	shareButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	shareButton:SetWidth(BUTTON_WIDTH)
+	shareButton:SetHeight(16)
+	shareButton:SetPoint("RIGHT", resetButton, "LEFT", -3, 0)
+	shareButton:SetText("Share")
+	shareButton:SetScript("OnClick", SendReport)
 
 	lines = {}
 
@@ -210,6 +320,19 @@ local function CreateUI()
 		elapsed = 0
 		if ns.dirty then UpdateDisplay() end
 	end)
+
+	-- Separate ticker: OnUpdate does not fire on a hidden frame, and the chat
+	-- queue still has to drain when the window is closed.
+	chatTicker = CreateFrame("Frame")
+	ns.chatElapsed = 0
+	chatTicker:SetScript("OnUpdate", function(self, delta)
+		if #chatQueue == 0 then return end
+		ns.chatElapsed = ns.chatElapsed + delta
+		if ns.chatElapsed < CHAT_SEND_INTERVAL then return end
+		ns.chatElapsed = 0
+		local line = table.remove(chatQueue, 1)
+		SendChatMessage(line.text, line.channel)
+	end)
 end
 
 local function SetupSlashCommands()
@@ -221,17 +344,17 @@ local function SetupSlashCommands()
 		if cmd == "reset" then
 			ns.ResetStats()
 			UpdateDisplay()
-			DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00WowDamageInfo:|r статистика сброшена.")
+			Print("статистика сброшена.")
 		elseif cmd == "lock" then
 			ToggleLock()
-			DEFAULT_CHAT_FRAME:AddMessage(db.locked
-				and "|cFF00FF00WowDamageInfo:|r окно зафиксировано."
-				or "|cFF00FF00WowDamageInfo:|r окно разблокировано.")
+			Print(db.locked and "окно зафиксировано." or "окно разблокировано.")
+		elseif cmd == "share" or cmd == "chat" then
+			SendReport()
 		elseif cmd == "" then
 			if frame:IsShown() then frame:Hide() else frame:Show() end
 			db.shown = frame:IsShown()
 		else
-			DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00WowDamageInfo:|r /wdi  ·  /wdi reset  ·  /wdi lock")
+			Print("/wdi  ·  /wdi reset  ·  /wdi lock  ·  /wdi share")
 		end
 	end
 end
