@@ -1,9 +1,9 @@
 ## Interface: 30300
-## Title: DamageTakenStats
+## Title: WowDamageInfo
 ## Notes: Incoming damage & mitigation tracker
 ## Author: vladrozd
 ## Version: 1.0
-## SavedVariablesPerCharacter: DamageTakenStatsDB
+## SavedVariablesPerCharacter: WowDamageInfoDB
 
 Core.lua
 UI.lua

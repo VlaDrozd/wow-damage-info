@@ -1,5 +1,5 @@
 --[[
-	DamageTakenStats -- Core.lua
+	WowDamageInfo -- Core.lua
 	Combat log parsing and stat accumulation.
 
 	Combat log signature on 3.3.5a (WotLK):

@@ -1,5 +1,5 @@
 --[[
-	DamageTakenStats -- UI.lua
+	WowDamageInfo -- UI.lua
 	Movable stat window, text rows, Reset/Lock buttons, slash commands.
 ]]
 
@@ -152,7 +152,7 @@ local function ToggleLock()
 end
 
 local function CreateUI()
-	frame = CreateFrame("Frame", "DamageTakenStatsFrame", UIParent)
+	frame = CreateFrame("Frame", "WowDamageInfoFrame", UIParent)
 	frame:SetWidth(FRAME_WIDTH)
 	frame:SetHeight(160)
 	frame:SetPoint("CENTER")
@@ -213,24 +213,25 @@ local function CreateUI()
 end
 
 local function SetupSlashCommands()
-	SLASH_DAMAGETAKENSTATS1 = "/dts"
-	SlashCmdList["DAMAGETAKENSTATS"] = function(msg)
+	SLASH_WOWDAMAGEINFO1 = "/wdi"
+	SLASH_WOWDAMAGEINFO2 = "/dts" -- alias kept from the addon's former name
+	SlashCmdList["WOWDAMAGEINFO"] = function(msg)
 		local cmd = string.lower(string.gsub(msg or "", "^%s*(.-)%s*$", "%1"))
 
 		if cmd == "reset" then
 			ns.ResetStats()
 			UpdateDisplay()
-			DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00DamageTakenStats:|r статистика сброшена.")
+			DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00WowDamageInfo:|r статистика сброшена.")
 		elseif cmd == "lock" then
 			ToggleLock()
 			DEFAULT_CHAT_FRAME:AddMessage(db.locked
-				and "|cFF00FF00DamageTakenStats:|r окно зафиксировано."
-				or "|cFF00FF00DamageTakenStats:|r окно разблокировано.")
+				and "|cFF00FF00WowDamageInfo:|r окно зафиксировано."
+				or "|cFF00FF00WowDamageInfo:|r окно разблокировано.")
 		elseif cmd == "" then
 			if frame:IsShown() then frame:Hide() else frame:Show() end
 			db.shown = frame:IsShown()
 		else
-			DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00DamageTakenStats:|r /dts | /dts reset | /dts lock")
+			DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00WowDamageInfo:|r /wdi  ·  /wdi reset  ·  /wdi lock")
 		end
 	end
 end
@@ -241,8 +242,8 @@ loader:SetScript("OnEvent", function(self, event, addonName)
 	if addonName ~= ADDON then return end
 	self:UnregisterEvent("ADDON_LOADED")
 
-	DamageTakenStatsDB = DamageTakenStatsDB or {}
-	db = DamageTakenStatsDB
+	WowDamageInfoDB = WowDamageInfoDB or {}
+	db = WowDamageInfoDB
 	for k, v in pairs(defaults) do
 		if db[k] == nil then db[k] = v end
 	end
